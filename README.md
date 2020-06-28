@@ -1,2 +1,2 @@
 # suspendIfCPUisIdle
-Script for automatically suspending my Proxmox VE 6.2-6 server, if low CPU-usage (wakeonlan when needed)
+Script for automatically suspending a computer/server, if low CPU-usage (wakeonlan can turn it on).
