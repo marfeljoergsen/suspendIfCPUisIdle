@@ -13,7 +13,7 @@ MAX_CPU_THRESHOLD=10
 sleepDelay="1m"
 #sleepDelay="2"
 
-logFile="/root/suspendIfCPUisIdle_LOG_FILE.txt"
+logFile="/tmp/suspendIfCPUisIdle_LOG_FILE.txt"
 echo " " >> $logFile 2>&1
 echo " " >> $logFile 2>&1
 echo " " >> $logFile 2>&1
@@ -38,13 +38,32 @@ testLinuxKernelIsRecent() {
     return "$numCols"
 }
 
+isSSH() {
+    local netstatESTABL=$(netstat -tnpa | grep 'ESTABLISHED.*sshd' | sed 's/ \+/ /g' | sed 's/ 0 0 / /g')
+    local socketStats=$(ss |grep -i ssh | sed 's/ \+/ /g' | sed 's/ 0 0 / /g')
+    #--
+    local nl=$(echo $netstatESTABL | wc -c)
+    local ns=$(echo $socketStats | wc -c)
+    #--
+    #if ((nl > 1 || ns > 1)); then
+    if ((ns > 1)); then
+        echo -e "$(date +"%m-%d-%Y at %R") | ss (socketStats): $socketStats; L=$ns" >> $logFile 2>&1
+        if (( nl <= 1)); then
+            echo -e "$(date +"%m-%d-%Y at %R") | netstat: $netstatESTABL; L=$nl" >> $logFile 2>&1
+        fi
+        true
+    else
+        false
+    fi
+}
+
 AllIsBelow() {
     local threshold="$1" # Save first argument in a variable
     shift # Shift all arguments to the left (original $1 gets lost)
     local array=("$@") # Rebuild the array with rest of arguments
     local length=${#array[@]}
     # Debug:
-    initMsg="$(date +%R) L=$length ; threshold=$threshold ; CPU-load: ${array[@]}"
+    initMsg="$(date +"%m-%d-%Y at %R") L=$length ; threshold=$threshold ; CPU-load: ${array[@]}"
 
     local allBelow=true
     for i in "${array[@]}"; do
@@ -226,28 +245,35 @@ while true; do
     if [ $array_len -eq $MAX_TIMES ]; then
         echo '--- TESTING IF PROXMOX SERVER SHOULD SUSPEND... ---' >> $logFile 2>&1
     fi
-    if [ $array_len -le $MAX_TIMES ]; then
-        echo -e "$(date +%R) | {AVGCPUARRAY[@]}=${AVGCPUARRAY[@]} ; {MAXCPUARRAY[@]}=${MAXCPUARRAY[@]}" >> $logFile 2>&1
-    else
-        MAXCPUARRAY=("${MAXCPUARRAY[@]:1}") #removed the 1st element
-        AVGCPUARRAY=("${AVGCPUARRAY[@]:1}") #removed the 1st element
 
-        # === Check if it's time to suspend ===
-        if AllIsBelow "$AVG_CPU_THRESHOLD" "${AVGCPUARRAY[@]}"; then
-        echo "$(date +%R) --> Average CPU-utilization is low..." >> $logFile 2>&1
-            if AllIsBelow "$MAX_CPU_THRESHOLD" "${MAXCPUARRAY[@]}"; then
-                echo "$(date +%R) *** AVG and MAX CPU-load values are below threshold ***" >> $logFile 2>&1
-                if true; then # turn on using true here...
-                    echo "*** $(date) Resetting and running \"sync && systemctl suspend\" ***" >> $logFile 2>&1
-                    # === Reset counters, start all over: ===
-                    MAXCPUARRAY=()
-                    AVGCPUARRAY=()
-                    sync ; sleep 4; sync ; systemctl suspend; sleep 30
-                    echo "*** $(date) Up and running again... ***" >> $logFile 2>&1
-                fi
-            fi
-        fi
-    fi
+    if isSSH; then
+        # === Reset counters, start all over: ===
+        MAXCPUARRAY=()
+        AVGCPUARRAY=()
+    else
+        if [ $array_len -le $MAX_TIMES ]; then
+            echo -e "$(date +"%m-%d-%Y at %R") | {AVGCPUARRAY[@]}=${AVGCPUARRAY[@]} ; {MAXCPUARRAY[@]}=${MAXCPUARRAY[@]}" >> $logFile 2>&1
+        else
+            MAXCPUARRAY=("${MAXCPUARRAY[@]:1}") #removed the 1st element
+            AVGCPUARRAY=("${AVGCPUARRAY[@]:1}") #removed the 1st element
+
+            # === Check if it's time to suspend ===
+            if AllIsBelow "$AVG_CPU_THRESHOLD" "${AVGCPUARRAY[@]}"; then
+                echo "$(date +"%m-%d-%Y at %R") --> Average CPU-utilization is low..." >> $logFile 2>&1
+                if AllIsBelow "$MAX_CPU_THRESHOLD" "${MAXCPUARRAY[@]}"; then
+                    echo "$(date +"%m-%d-%Y at %R") *** AVG and MAX CPU-load values are below threshold ***" >> $logFile 2>&1
+                    if true; then # disable this, when testing only...
+                        echo "*** $(date) Resetting and running \"sync && systemctl suspend\" ***" >> $logFile 2>&1
+                        # === Reset counters, start all over: ===
+                        MAXCPUARRAY=()
+                        AVGCPUARRAY=()
+                        sync ; sleep 4; sync ; systemctl suspend; sleep 30
+                        echo "*** $(date) Up and running again... ***" >> $logFile 2>&1
+                    fi
+                fi # if AllIsBelow "$MAX_CPU_THRESHOLD" "${MAXCPUARRAY[@]}"; then
+            fi # if AllIsBelow "$AVG_CPU_THRESHOLD" "${AVGCPUARRAY[@]}"; then
+        fi # if [ $array_len -le $MAX_TIMES ]; then
+    fi # if isSSH
 
     # Wait before next poll (default unit is a number in seconds, while
     #   sleep "2m" = 2 minutes, "2h"=2 hours, "2d"=2 days):
